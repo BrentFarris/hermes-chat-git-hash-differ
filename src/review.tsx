@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Button as NativeButton, Input, Switch } from '@hermes/plugin-sdk';
 import { ReviewController } from './controller';
 import type { ChangedFile, DiffLine, FileDiff } from './types';
@@ -50,10 +50,14 @@ export function VirtualList<T>({ items, height = 44, label, render, active = -1,
 
 export function Settings({ ctrl }: { ctrl: ReviewController }) {
   const state = useReview(ctrl);
+  const id = useId();
   return <div className="hgd hgd-settings"><Styles/><h2>Chat Git Hash Differ</h2>
-    <div className="hgd-setting"><div><label htmlFor="hgd-auto-open">Automatically open the commit panel</label>
+    <div className="hgd-setting"><div><label htmlFor={`${id}-auto-open`}>Automatically open the commit panel</label>
       <p>Open once per chat when a valid commit is found. Later discoveries leave your review in place.</p></div>
-      <Switch id="hgd-auto-open" checked={state.snapshot?.auto_open ?? true} onCheckedChange={(value: boolean) => void ctrl.autoOpen(value)} /></div>
+      <Switch id={`${id}-auto-open`} checked={state.snapshot?.auto_open ?? true} onCheckedChange={(value: boolean) => void ctrl.autoOpen(value)} /></div>
+    <div className="hgd-setting"><div><label htmlFor={`${id}-chips`}>Show commit chips below the composer</label>
+      <p>Quick access to the focused chat’s commits, even when review is closed. Saved on this client.</p></div>
+      <Switch id={`${id}-chips`} checked={ctrl.showChips} onCheckedChange={(value: boolean) => ctrl.setShowChips(value)} /></div>
     <p>Repository paths refer to the machine running this chat’s Hermes backend. Review progress is shared with its Webapp.</p>
     {state.error && <p role="alert">{state.error}</p>}
   </div>;
@@ -195,6 +199,7 @@ export function ReviewPane({ ctrl, expanded = false, expand }: { ctrl: ReviewCon
   const [filesOpen, setFilesOpen] = useState(true);
   const [commitSearch, setCommitSearch] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  useEffect(() => { setSettingsOpen(false); setDialog(null); setCommitSearch(''); }, [ctrl, state.navigation]);
   const commits = state.snapshot?.commits || [];
   const index = commits.findIndex(c => c.id === state.commitId);
   const commit = commits[index];

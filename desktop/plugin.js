@@ -1,6 +1,6 @@
 // src/plugin.tsx
 import { useSyncExternalStore as useSyncExternalStore2 } from "react";
-import { host, Button as Button2, STATUSBAR_AREAS } from "@hermes/plugin-sdk";
+import { host, Button as Button3, STATUSBAR_AREAS, COMPOSER_AREAS, PALETTE_AREA } from "@hermes/plugin-sdk";
 
 // src/controller.ts
 var ID = "hermes-chat-git-hash-differ";
@@ -19,6 +19,7 @@ var ReviewController = class {
     this.onSnapshot = onSnapshot;
     this.key = routeKey(route);
     this.remembered = storage.get(`navigation:${this.key}`, {});
+    this.discovery = storage.get(`discovery:${this.key}`, null);
   }
   state = {
     snapshot: null,
@@ -32,7 +33,8 @@ var ReviewController = class {
     error: "",
     context: 3,
     saving: [],
-    revision: 0
+    revision: 0,
+    navigation: 0
   };
   listeners = /* @__PURE__ */ new Set();
   selection = 0;
@@ -41,6 +43,7 @@ var ReviewController = class {
   refreshing = false;
   dead = false;
   remembered;
+  discovery;
   key;
   subscribe = (fn) => {
     this.listeners.add(fn);
@@ -69,6 +72,13 @@ var ReviewController = class {
     try {
       const snapshot = await this.rpc(this.route, force ? "session.refresh" : "session.get");
       if (this.dead || life !== this.lifetime) return;
+      if (!snapshot.scanning) {
+        const known = new Set(this.discovery?.known);
+        const fresh = new Set(this.discovery?.fresh);
+        const ids = snapshot.commits.map((c) => c.id);
+        this.discovery = { known: ids, fresh: ids.filter((id) => fresh.has(id) || !!this.discovery && !known.has(id)) };
+        this.storage.set(`discovery:${this.key}`, this.discovery);
+      }
       this.set({ snapshot, error: "" });
       if (this.state.commitId && !snapshot.commits.some((c) => c.id === this.state.commitId) && !snapshot.scanning) this.overview();
       this.onSnapshot(this);
@@ -90,6 +100,29 @@ var ReviewController = class {
     this.selection++;
     this.set({ commitId: null, parent: null, fileId: null, listing: null, diff: null, loading: false });
   }
+  isNew(commitId) {
+    return this.discovery?.fresh.includes(commitId) ?? false;
+  }
+  get newCount() {
+    return this.state.snapshot?.commits.filter((c) => this.isNew(c.id)).length || 0;
+  }
+  get showChips() {
+    return this.storage.get("showCommitChips", true);
+  }
+  setShowChips(show) {
+    this.storage.set("showCommitChips", show);
+    this.set({});
+  }
+  get resumeTarget() {
+    const last = this.storage.get(`lastReview:${this.key}`, null);
+    return last && this.state.snapshot?.commits.some((c) => c.id === last.commitId) ? last : null;
+  }
+  async navigate(commitId, parent) {
+    if (!this.state.snapshot?.commits.some((c) => c.id === commitId)) return;
+    this.set({ navigation: this.state.navigation + 1 });
+    if (this.state.commitId === commitId && (parent === void 0 || parent === this.state.parent) && (this.state.listing || this.state.loading)) return;
+    await this.selectCommit(commitId, parent ?? null);
+  }
   async selectCommit(commitId, parent = null) {
     const token = ++this.selection;
     const life = this.lifetime;
@@ -99,8 +132,13 @@ var ReviewController = class {
       if (token !== this.selection || life !== this.lifetime) return;
       const saved = this.remembered[`${commitId}:${listing.parent}`]?.file;
       const file = listing.files.find((f) => f.id === saved) || listing.files.find((f) => !f.reviewed) || listing.files[0];
+      this.storage.set(`lastReview:${this.key}`, { commitId, parent: listing.parent });
+      if (this.discovery) {
+        this.discovery = { ...this.discovery, fresh: this.discovery.fresh.filter((id) => id !== commitId) };
+        this.storage.set(`discovery:${this.key}`, this.discovery);
+      }
       this.set({ listing, parent: listing.parent, loading: false });
-      if (file) await this.selectFile(file.id);
+      if (file) await this.selectFile(file.id, this.remembered[`${commitId}:${listing.parent}`]?.context?.[file.id] ?? 3);
     } catch (error) {
       if (token === this.selection) this.set({ error: errorMessage(error), loading: false });
     }
@@ -111,7 +149,7 @@ var ReviewController = class {
     const token = ++this.selection;
     const life = this.lifetime;
     const nav = `${commitId}:${parent}`;
-    this.remembered[nav] = { ...this.remembered[nav], file: fileId };
+    this.remembered[nav] = { ...this.remembered[nav], file: fileId, context: { ...this.remembered[nav]?.context, [fileId]: context } };
     this.storage.set(`navigation:${this.key}`, this.remembered);
     this.set({ fileId, context, diff: null, loading: true, error: "" });
     try {
@@ -186,11 +224,11 @@ function shouldAutoOpen(ctrl, storage) {
 }
 
 // src/review.tsx
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Button as NativeButton, Input, Switch } from "@hermes/plugin-sdk";
 
 // src/styles.css
-var styles_default = ".hgd { --hgd-muted: var(--ui-text-secondary, #9299a7); --hgd-line: var(--ui-stroke-tertiary, #303640); --hgd-accent: var(--ui-accent, #6ea9fa); font: 13px/1.5 system-ui,sans-serif; color:var(--ui-text-primary,inherit); min-width:0; }\n.hgd * { box-sizing:border-box; }\n.hgd-pane { height:100%; display:flex; flex-direction:column; overflow:hidden; position:relative; }\n.hgd button,.hgd input,.hgd select { font:inherit; }\n.hgd button { cursor:pointer; }\n.hgd button:disabled { opacity:.45; cursor:default; }\n.hgd button:focus-visible,.hgd input:focus-visible,.hgd select:focus-visible { outline:2px solid var(--hgd-accent); outline-offset:2px; }\n.hgd select { color:inherit; background:var(--ui-bg-base, Canvas); border:1px solid var(--hgd-line); border-radius:6px; padding:6px; max-width:100%; }\n.hgd input[type=checkbox] { accent-color:var(--hgd-accent); flex:none; width:15px; height:15px; }\n.hgd input:not([type=checkbox]) { width:100%; }\n.hgd-header { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:12px; border-bottom:1px solid var(--hgd-line); flex:none; }\n.hgd-header>div,.hgd-actions,.hgd-row { display:flex; align-items:center; gap:8px; min-width:0; }\n.hgd-count { border:1px solid var(--hgd-line); border-radius:12px; padding:0 7px; }\n.hgd-grow { flex:1; }\n.hgd-muted { color:var(--hgd-muted); font-size:12px; }\n.hgd-padded { padding:10px 12px; }\n.hgd-scan { font-size:11px; color:var(--hgd-muted); padding:4px 12px; }\n.hgd-empty { padding:24px 16px; text-align:center; color:var(--hgd-muted); }\n.hgd-empty strong { color:var(--ui-text-primary,inherit); }\n.hgd-empty p { max-width:36em; margin:10px auto; }\n.hgd-error { border-left:3px solid #e1a657; padding:9px 12px; overflow-wrap:anywhere; }\n.hgd-error button { margin-left:10px; }\n.hgd-details { border-top:1px solid var(--hgd-line); padding:8px 12px; flex:none; }\n.hgd summary { cursor:pointer; }\n.hgd-repo { display:flex; gap:8px; align-items:center; justify-content:space-between; padding:7px 0; }\n.hgd-repo span { overflow-wrap:anywhere; min-width:0; }\n.hgd-repo small { display:block; color:var(--hgd-muted); }\n.hgd-unresolved { max-height:190px; overflow:auto; }\n.hgd-virtual { height:100%; min-height:0; overflow:auto; flex:1; overscroll-behavior:contain; }\n.hgd-commit-list { flex:1; min-height:130px; display:flex; flex-direction:column; }\n.hgd-commit { padding:10px 12px; width:100%; height:100%; border:0; border-bottom:1px solid var(--hgd-line); background:transparent; color:inherit; text-align:left; }\n.hgd-commit:hover,.hgd-file-row:hover { background:color-mix(in srgb,var(--hgd-accent) 7%,transparent); }\n.hgd-commit strong { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin:4px 0; }\n.hgd-commit .hgd-row { overflow:hidden; white-space:nowrap; }\n.hgd-progress { margin-left:auto; font-size:11px; color:var(--hgd-muted); }\n.hgd-selection { padding:8px 12px; display:flex; flex-direction:column; gap:7px; border-bottom:1px solid var(--hgd-line); flex:none; }\n.hgd-selection>select { width:100%; }\n.hgd-full-sha { word-break:break-all; }\n.hgd-review-body { display:flex; flex-direction:column; flex:1; min-height:0; }\n.hgd-file-section { display:flex; flex-direction:column; height:min(220px,35%); min-height:33px; flex-shrink:0; border-bottom:1px solid var(--hgd-line); }\n.hgd-file-section.hgd-collapsed { height:33px; }\n.hgd-files-toggle { border:0; background:transparent; color:inherit; text-align:left; padding:7px 12px; }\n.hgd-files { display:flex; flex-direction:column; flex:1; min-height:0; padding:0 8px 5px; }\n.hgd-filter { font-size:12px; display:flex; gap:5px; align-items:center; padding:5px 0; }\n.hgd-directory { color:var(--hgd-muted); font-size:11px; line-height:38px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }\n.hgd-file-row { display:flex; align-items:center; height:38px; gap:6px; border-radius:4px; }\n.hgd-selected { background:color-mix(in srgb,var(--hgd-accent) 14%,transparent); }\n.hgd-file-row>button { border:0; background:transparent; color:inherit; flex:1; min-width:0; display:flex; align-items:center; gap:6px; padding:6px 3px; text-align:left; }\n.hgd-filename { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }\n.hgd-status { font:11px ui-monospace,monospace; color:var(--hgd-muted); }\n.hgd-file-row small { font-size:10px; white-space:nowrap; color:var(--hgd-muted); }\n.hgd-diff { display:flex; flex-direction:column; min-height:150px; min-width:0; flex:1; }\n.hgd-diff-header { display:flex; align-items:center; gap:10px; padding:8px 12px; border-bottom:1px solid var(--hgd-line); }\n.hgd-diff-header strong { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }\n.hgd-diff-header label { white-space:nowrap; display:flex; align-items:center; gap:4px; font-size:12px; }\n.hgd-toolbar { display:flex; align-items:center; gap:9px; padding:5px 12px; flex-wrap:wrap; }\n.hgd-notice { padding:12px; color:var(--hgd-muted); }\n.hgd-line { display:flex; height:24px; line-height:24px; min-width:max-content; font:12px/24px ui-monospace,SFMono-Regular,Consolas,monospace; }\n.hgd-number { width:46px; flex:none; text-align:right; padding-right:8px; color:var(--hgd-muted); user-select:none; }\n.hgd-sign { width:20px; text-align:center; flex:none; user-select:none; }\n.hgd-line code { white-space:pre; padding-right:16px; tab-size:4; }\n.hgd-add { background:color-mix(in srgb,#38ad77 15%,transparent); }\n.hgd-add .hgd-sign { color:#42b883; }\n.hgd-delete { background:color-mix(in srgb,#e16d76 15%,transparent); }\n.hgd-delete .hgd-sign { color:#e78991; }\n.hgd-note { color:var(--hgd-muted); font-style:italic; }\n.hgd-hunk { background:color-mix(in srgb,var(--hgd-accent) 10%,transparent); color:var(--hgd-muted); font:11px/24px ui-monospace,monospace; padding-left:12px; white-space:pre; min-width:max-content; }\n.hgd-split { display:grid; grid-template-columns:1fr 1fr; height:24px; }\n.hgd-split .hgd-line { min-width:0; overflow:hidden; }\n.hgd-split .hgd-line:first-child { border-right:1px solid var(--hgd-line); }\n.hgd-expanded .hgd-review-body { flex-direction:row; }\n.hgd-expanded .hgd-file-section { width:270px; height:auto; border-right:1px solid var(--hgd-line); border-bottom:0; }\n.hgd-expanded .hgd-file-section.hgd-collapsed { width:90px; }\n.hgd-settings { padding:20px; overflow:auto; }\n.hgd-settings h2 { font-size:16px; margin-top:0; }\n.hgd-setting { display:flex; align-items:center; gap:20px; }\n.hgd-setting>div { flex:1; }\n.hgd-settings p { color:var(--hgd-muted); }\n.hgd-dialog-backdrop { position:absolute; inset:0; background:#0007; z-index:10; display:flex; align-items:center; justify-content:center; padding:16px; }\n.hgd-dialog { width:100%; max-width:460px; padding:20px; border:1px solid var(--hgd-line); border-radius:10px; background:var(--ui-bg-base,Canvas); box-shadow:0 12px 40px #0004; }\n.hgd-dialog h3 { margin:0 0 10px; }\n.hgd-dialog .hgd-actions { justify-content:flex-end; margin-top:12px; }\n@media(max-width:750px) { .hgd-expanded .hgd-review-body { flex-direction:column; } .hgd-expanded .hgd-file-section { width:auto; height:210px; } .hgd-expanded .hgd-file-section.hgd-collapsed { width:auto; height:33px; } }\n";
+var styles_default = ".hgd { --hgd-muted: var(--ui-text-secondary, #9299a7); --hgd-line: var(--ui-stroke-tertiary, #303640); --hgd-accent: var(--ui-accent, #6ea9fa); font: 13px/1.5 system-ui,sans-serif; color:var(--ui-text-primary,inherit); min-width:0; }\n.hgd * { box-sizing:border-box; }\n.hgd-pane { height:100%; display:flex; flex-direction:column; overflow:hidden; position:relative; }\n.hgd button,.hgd input,.hgd select { font:inherit; }\n.hgd button { cursor:pointer; }\n.hgd button:disabled { opacity:.45; cursor:default; }\n.hgd button:focus-visible,.hgd input:focus-visible,.hgd select:focus-visible { outline:2px solid var(--hgd-accent); outline-offset:2px; }\n.hgd select { color:inherit; background:var(--ui-bg-base, Canvas); border:1px solid var(--hgd-line); border-radius:6px; padding:6px; max-width:100%; }\n.hgd input[type=checkbox] { accent-color:var(--hgd-accent); flex:none; width:15px; height:15px; }\n.hgd input:not([type=checkbox]) { width:100%; }\n.hgd-header { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:12px; border-bottom:1px solid var(--hgd-line); flex:none; }\n.hgd-header>div,.hgd-actions,.hgd-row { display:flex; align-items:center; gap:8px; min-width:0; }\n.hgd-count { border:1px solid var(--hgd-line); border-radius:12px; padding:0 7px; }\n.hgd-grow { flex:1; }\n.hgd-muted { color:var(--hgd-muted); font-size:12px; }\n.hgd-padded { padding:10px 12px; }\n.hgd-scan { font-size:11px; color:var(--hgd-muted); padding:4px 12px; }\n.hgd-empty { padding:24px 16px; text-align:center; color:var(--hgd-muted); }\n.hgd-empty strong { color:var(--ui-text-primary,inherit); }\n.hgd-empty p { max-width:36em; margin:10px auto; }\n.hgd-error { border-left:3px solid #e1a657; padding:9px 12px; overflow-wrap:anywhere; }\n.hgd-error button { margin-left:10px; }\n.hgd-details { border-top:1px solid var(--hgd-line); padding:8px 12px; flex:none; }\n.hgd summary { cursor:pointer; }\n.hgd-repo { display:flex; gap:8px; align-items:center; justify-content:space-between; padding:7px 0; }\n.hgd-repo span { overflow-wrap:anywhere; min-width:0; }\n.hgd-repo small { display:block; color:var(--hgd-muted); }\n.hgd-unresolved { max-height:190px; overflow:auto; }\n.hgd-virtual { height:100%; min-height:0; overflow:auto; flex:1; overscroll-behavior:contain; }\n.hgd-commit-list { flex:1; min-height:130px; display:flex; flex-direction:column; }\n.hgd-commit { padding:10px 12px; width:100%; height:100%; border:0; border-bottom:1px solid var(--hgd-line); background:transparent; color:inherit; text-align:left; }\n.hgd-commit:hover,.hgd-file-row:hover { background:color-mix(in srgb,var(--hgd-accent) 7%,transparent); }\n.hgd-commit strong { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin:4px 0; }\n.hgd-commit .hgd-row { overflow:hidden; white-space:nowrap; }\n.hgd-progress { margin-left:auto; font-size:11px; color:var(--hgd-muted); }\n.hgd-selection { padding:8px 12px; display:flex; flex-direction:column; gap:7px; border-bottom:1px solid var(--hgd-line); flex:none; }\n.hgd-selection>select { width:100%; }\n.hgd-full-sha { word-break:break-all; }\n.hgd-review-body { display:flex; flex-direction:column; flex:1; min-height:0; }\n.hgd-file-section { display:flex; flex-direction:column; height:min(220px,35%); min-height:33px; flex-shrink:0; border-bottom:1px solid var(--hgd-line); }\n.hgd-file-section.hgd-collapsed { height:33px; }\n.hgd-files-toggle { border:0; background:transparent; color:inherit; text-align:left; padding:7px 12px; }\n.hgd-files { display:flex; flex-direction:column; flex:1; min-height:0; padding:0 8px 5px; }\n.hgd-filter { font-size:12px; display:flex; gap:5px; align-items:center; padding:5px 0; }\n.hgd-directory { color:var(--hgd-muted); font-size:11px; line-height:38px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }\n.hgd-file-row { display:flex; align-items:center; height:38px; gap:6px; border-radius:4px; }\n.hgd-selected { background:color-mix(in srgb,var(--hgd-accent) 14%,transparent); }\n.hgd-file-row>button { border:0; background:transparent; color:inherit; flex:1; min-width:0; display:flex; align-items:center; gap:6px; padding:6px 3px; text-align:left; }\n.hgd-filename { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }\n.hgd-status { font:11px ui-monospace,monospace; color:var(--hgd-muted); }\n.hgd-file-row small { font-size:10px; white-space:nowrap; color:var(--hgd-muted); }\n.hgd-diff { display:flex; flex-direction:column; min-height:150px; min-width:0; flex:1; }\n.hgd-diff-header { display:flex; align-items:center; gap:10px; padding:8px 12px; border-bottom:1px solid var(--hgd-line); }\n.hgd-diff-header strong { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }\n.hgd-diff-header label { white-space:nowrap; display:flex; align-items:center; gap:4px; font-size:12px; }\n.hgd-toolbar { display:flex; align-items:center; gap:9px; padding:5px 12px; flex-wrap:wrap; }\n.hgd-notice { padding:12px; color:var(--hgd-muted); }\n.hgd-line { display:flex; height:24px; line-height:24px; min-width:max-content; font:12px/24px ui-monospace,SFMono-Regular,Consolas,monospace; }\n.hgd-number { width:46px; flex:none; text-align:right; padding-right:8px; color:var(--hgd-muted); user-select:none; }\n.hgd-sign { width:20px; text-align:center; flex:none; user-select:none; }\n.hgd-line code { white-space:pre; padding-right:16px; tab-size:4; }\n.hgd-add { background:color-mix(in srgb,#38ad77 15%,transparent); }\n.hgd-add .hgd-sign { color:#42b883; }\n.hgd-delete { background:color-mix(in srgb,#e16d76 15%,transparent); }\n.hgd-delete .hgd-sign { color:#e78991; }\n.hgd-note { color:var(--hgd-muted); font-style:italic; }\n.hgd-hunk { background:color-mix(in srgb,var(--hgd-accent) 10%,transparent); color:var(--hgd-muted); font:11px/24px ui-monospace,monospace; padding-left:12px; white-space:pre; min-width:max-content; }\n.hgd-split { display:grid; grid-template-columns:1fr 1fr; height:24px; }\n.hgd-split .hgd-line { min-width:0; overflow:hidden; }\n.hgd-split .hgd-line:first-child { border-right:1px solid var(--hgd-line); }\n.hgd-expanded .hgd-review-body { flex-direction:row; }\n.hgd-expanded .hgd-file-section { width:270px; height:auto; border-right:1px solid var(--hgd-line); border-bottom:0; }\n.hgd-expanded .hgd-file-section.hgd-collapsed { width:90px; }\n.hgd-settings { padding:20px; overflow:auto; }\n.hgd-settings h2 { font-size:16px; margin-top:0; }\n.hgd-setting { display:flex; align-items:center; gap:20px; }\n.hgd-setting>div { flex:1; }\n.hgd-settings p { color:var(--hgd-muted); }\n.hgd-dialog-backdrop { position:absolute; inset:0; background:#0007; z-index:10; display:flex; align-items:center; justify-content:center; padding:16px; }\n.hgd-dialog { width:100%; max-width:460px; padding:20px; border:1px solid var(--hgd-line); border-radius:10px; background:var(--ui-bg-base,Canvas); box-shadow:0 12px 40px #0004; }\n.hgd-dialog h3 { margin:0 0 10px; }\n.hgd-dialog .hgd-actions { justify-content:flex-end; margin-top:12px; }\n.hgd-commit-strip { display:flex; align-items:center; gap:6px; width:100%; min-width:0; padding:1px 0; }\n.hgd .hgd-chip { display:inline-flex; align-items:center; gap:5px; height:27px; min-height:27px; padding:3px 8px; border:1px solid var(--hgd-line); border-radius:14px; background:var(--composer-fill,var(--ui-bg-base,Canvas)); color:var(--hgd-muted); white-space:nowrap; font-size:11px; font-weight:400; flex-shrink:0; }\n.hgd .hgd-chip:hover { background:var(--chrome-action-hover,color-mix(in srgb,var(--hgd-accent) 12%,transparent)); color:var(--ui-text-primary,inherit); }\n.hgd .hgd-hash-chip { flex-shrink:1; min-width:0; max-width:162px; }\n.hgd-chip code { font:11px ui-monospace,monospace; }\n.hgd-chip-subject { overflow:hidden; text-overflow:ellipsis; min-width:0; }\n.hgd-new { font-size:10px; color:var(--hgd-accent); }\n.hgd .hgd-resume { margin-left:auto; }\n.hgd-commit-picker { width:min(420px,calc(100vw - 24px)); max-height:var(--radix-popover-content-available-height,480px); display:flex; flex-direction:column; gap:8px; padding:12px; overflow:hidden; }\n.hgd-picker-heading { display:flex; justify-content:space-between; gap:8px; }\n.hgd-picker-chat { margin:0; font-size:11px; color:var(--hgd-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }\n.hgd-picker-results { display:flex; flex-direction:column; height:280px; min-height:70px; overflow:hidden; }\n.hgd-picker-result { width:100%; height:100%; border:0; border-radius:5px; padding:6px 8px; background:transparent; text-align:left; color:inherit; }\n.hgd-picker-result:hover { background:color-mix(in srgb,var(--hgd-accent) 9%,transparent); }\n.hgd-picker-result strong,.hgd-picker-result small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }\n.hgd-picker-result small,.hgd-picker-result .hgd-row { color:var(--hgd-muted); font-size:11px; }\n@media(max-width:750px) { .hgd-expanded .hgd-review-body { flex-direction:column; } .hgd-expanded .hgd-file-section { width:auto; height:210px; } .hgd-expanded .hgd-file-section.hgd-collapsed { width:auto; height:33px; } }\n";
 
 // src/review.tsx
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
@@ -256,15 +294,23 @@ function VirtualList({ items, height = 44, label, render, active = -1, initialSc
 }
 function Settings({ ctrl }) {
   const state = useReview(ctrl);
+  const id = useId();
   return /* @__PURE__ */ jsxs("div", { className: "hgd hgd-settings", children: [
     /* @__PURE__ */ jsx(Styles, {}),
     /* @__PURE__ */ jsx("h2", { children: "Chat Git Hash Differ" }),
     /* @__PURE__ */ jsxs("div", { className: "hgd-setting", children: [
       /* @__PURE__ */ jsxs("div", { children: [
-        /* @__PURE__ */ jsx("label", { htmlFor: "hgd-auto-open", children: "Automatically open the commit panel" }),
+        /* @__PURE__ */ jsx("label", { htmlFor: `${id}-auto-open`, children: "Automatically open the commit panel" }),
         /* @__PURE__ */ jsx("p", { children: "Open once per chat when a valid commit is found. Later discoveries leave your review in place." })
       ] }),
-      /* @__PURE__ */ jsx(Switch, { id: "hgd-auto-open", checked: state.snapshot?.auto_open ?? true, onCheckedChange: (value) => void ctrl.autoOpen(value) })
+      /* @__PURE__ */ jsx(Switch, { id: `${id}-auto-open`, checked: state.snapshot?.auto_open ?? true, onCheckedChange: (value) => void ctrl.autoOpen(value) })
+    ] }),
+    /* @__PURE__ */ jsxs("div", { className: "hgd-setting", children: [
+      /* @__PURE__ */ jsxs("div", { children: [
+        /* @__PURE__ */ jsx("label", { htmlFor: `${id}-chips`, children: "Show commit chips below the composer" }),
+        /* @__PURE__ */ jsx("p", { children: "Quick access to the focused chat’s commits, even when review is closed. Saved on this client." })
+      ] }),
+      /* @__PURE__ */ jsx(Switch, { id: `${id}-chips`, checked: ctrl.showChips, onCheckedChange: (value) => ctrl.setShowChips(value) })
     ] }),
     /* @__PURE__ */ jsx("p", { children: "Repository paths refer to the machine running this chat’s Hermes backend. Review progress is shared with its Webapp." }),
     state.error && /* @__PURE__ */ jsx("p", { role: "alert", children: state.error })
@@ -509,6 +555,11 @@ function ReviewPane({ ctrl, expanded = false, expand }) {
   const [filesOpen, setFilesOpen] = useState(true);
   const [commitSearch, setCommitSearch] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  useEffect(() => {
+    setSettingsOpen(false);
+    setDialog(null);
+    setCommitSearch("");
+  }, [ctrl, state.navigation]);
   const commits = state.snapshot?.commits || [];
   const index = commits.findIndex((c) => c.id === state.commitId);
   const commit = commits[index];
@@ -610,8 +661,159 @@ function ReviewPane({ ctrl, expanded = false, expand }) {
   ] });
 }
 
-// src/plugin.tsx
+// src/composer.tsx
+import { useLayoutEffect as useLayoutEffect2, useRef as useRef2, useState as useState2 } from "react";
+import { Button as Button2, Input as Input2, Popover, PopoverContent, PopoverTrigger } from "@hermes/plugin-sdk";
 import { jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
+var complete = (commit) => commit.file_count !== null && commit.reviewed_count === commit.file_count;
+var progress = (commit) => `${commit.reviewed_count || 0} of ${commit.file_count ?? "unknown"} files reviewed`;
+var description = (commit) => `${commit.sha}
+${commit.subject}
+${commit.repo_name} · ${progress(commit)}`;
+function CommitStrip({ ctrl, open }) {
+  const state = useReview(ctrl);
+  const strip = useRef2(null);
+  const results = useRef2(null);
+  const picked = useRef2(false);
+  const [limit, setLimit] = useState2(3);
+  const [pickerOpen, setPickerOpen] = useState2(false);
+  const [query, setQuery] = useState2("");
+  useLayoutEffect2(() => {
+    if (!strip.current) return;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width || 0;
+      setLimit(width >= 790 ? 3 : width >= 620 ? 2 : width >= 440 ? 1 : 0);
+    });
+    observer.observe(strip.current);
+    return () => observer.disconnect();
+  }, []);
+  const commits = state.snapshot?.commits || [];
+  const filtered = commits.filter((c) => `${c.sha} ${c.subject} ${c.repo_name}`.toLowerCase().includes(query.trim().toLowerCase()));
+  const recent = commits.slice(0, limit);
+  const remaining = commits.length - recent.length;
+  const title = state.snapshot?.session.title || "Untitled chat";
+  const resume = ctrl.resumeTarget;
+  const resumedCommit = commits.find((c) => c.id === resume?.commitId);
+  const choose = (commit) => {
+    picked.current = true;
+    setPickerOpen(false);
+    open(commit.id);
+  };
+  if (!commits.length || !ctrl.showChips) return null;
+  return /* @__PURE__ */ jsxs2("div", { ref: strip, className: "hgd hgd-commit-strip", role: "region", "aria-label": `Commits for ${title} (focused chat)`, children: [
+    /* @__PURE__ */ jsx2(Styles, {}),
+    /* @__PURE__ */ jsxs2(Button2, { variant: "ghost", size: "xs", className: "hgd-chip hgd-commit-count", title: `Review commits in the focused chat: ${title}`, onClick: () => open(), children: [
+      "Commits · ",
+      commits.length,
+      ctrl.newCount > 0 && /* @__PURE__ */ jsxs2("span", { className: "hgd-new", children: [
+        ctrl.newCount,
+        " new"
+      ] })
+    ] }),
+    recent.map((commit) => /* @__PURE__ */ jsxs2(
+      Button2,
+      {
+        variant: "ghost",
+        size: "xs",
+        className: "hgd-chip hgd-hash-chip",
+        "aria-label": `Review ${commit.sha.slice(0, 8)}: ${commit.subject}${complete(commit) ? " (reviewed)" : ""}`,
+        title: description(commit),
+        onClick: () => choose(commit),
+        children: [
+          complete(commit) && /* @__PURE__ */ jsx2("span", { "aria-hidden": "true", children: "✓" }),
+          /* @__PURE__ */ jsx2("code", { children: commit.sha.slice(0, 8) }),
+          /* @__PURE__ */ jsx2("span", { className: "hgd-chip-subject", children: commit.subject }),
+          ctrl.isNew(commit.id) && /* @__PURE__ */ jsx2("span", { className: "hgd-new", children: "New" })
+        ]
+      },
+      commit.id
+    )),
+    remaining > 0 && /* @__PURE__ */ jsxs2(Popover, { modal: true, open: pickerOpen, onOpenChange: (value) => {
+      picked.current = false;
+      setPickerOpen(value);
+      if (value) setQuery("");
+    }, children: [
+      /* @__PURE__ */ jsx2(PopoverTrigger, { asChild: true, children: /* @__PURE__ */ jsxs2(Button2, { variant: "ghost", size: "xs", className: "hgd-chip", "aria-label": `Find a commit (${remaining} more)`, title: "Search all commits by hash, subject or repository", children: [
+        "+",
+        remaining
+      ] }) }),
+      /* @__PURE__ */ jsxs2(
+        PopoverContent,
+        {
+          side: "top",
+          align: "start",
+          collisionPadding: 12,
+          className: "hgd hgd-commit-picker",
+          "aria-label": `Find a commit in ${title}`,
+          onCloseAutoFocus: (event) => {
+            if (picked.current) event.preventDefault();
+          },
+          children: [
+            /* @__PURE__ */ jsx2(Styles, {}),
+            /* @__PURE__ */ jsxs2("div", { className: "hgd-picker-heading", children: [
+              /* @__PURE__ */ jsx2("strong", { children: "Session commits" }),
+              /* @__PURE__ */ jsx2("span", { className: "hgd-muted", children: commits.length })
+            ] }),
+            /* @__PURE__ */ jsxs2("p", { className: "hgd-picker-chat", title, children: [
+              "Focused chat: ",
+              title
+            ] }),
+            /* @__PURE__ */ jsx2(
+              Input2,
+              {
+                "aria-label": "Find a session commit",
+                placeholder: "Hash, subject or repository…",
+                value: query,
+                onChange: (event) => setQuery(event.target.value),
+                onKeyDown: (event) => {
+                  if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    results.current?.querySelector("button")?.focus();
+                  }
+                  if (event.key === "Enter" && !event.nativeEvent.isComposing && filtered.length === 1) {
+                    event.preventDefault();
+                    choose(filtered[0]);
+                  }
+                }
+              }
+            ),
+            /* @__PURE__ */ jsxs2("div", { className: "hgd-picker-results", ref: results, children: [
+              /* @__PURE__ */ jsx2(VirtualList, { items: filtered, height: 70, label: "Matching commits", render: (commit) => /* @__PURE__ */ jsxs2("button", { className: "hgd-picker-result", title: description(commit), onClick: () => choose(commit), children: [
+                /* @__PURE__ */ jsxs2("div", { className: "hgd-row", children: [
+                  /* @__PURE__ */ jsx2("code", { children: commit.sha.slice(0, 8) }),
+                  complete(commit) && /* @__PURE__ */ jsx2("span", { children: "✓ Reviewed" }),
+                  ctrl.isNew(commit.id) && /* @__PURE__ */ jsx2("span", { className: "hgd-new", children: "New" })
+                ] }),
+                /* @__PURE__ */ jsx2("strong", { children: commit.subject }),
+                /* @__PURE__ */ jsxs2("small", { children: [
+                  commit.repo_name,
+                  " · ",
+                  progress(commit)
+                ] })
+              ] }) }, query),
+              !filtered.length && /* @__PURE__ */ jsx2("p", { className: "hgd-empty", children: "No matching commits." })
+            ] })
+          ]
+        }
+      )
+    ] }),
+    resumedCommit && /* @__PURE__ */ jsx2(
+      Button2,
+      {
+        variant: "ghost",
+        size: "xs",
+        className: "hgd-chip hgd-resume",
+        "aria-label": "Resume review",
+        title: `Resume ${resumedCommit.sha.slice(0, 8)}: ${resumedCommit.subject} — last file and scroll position`,
+        onClick: () => open(void 0, true),
+        children: "Resume review"
+      }
+    )
+  ] });
+}
+
+// src/plugin.tsx
+import { jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
 var PluginApp = class {
   constructor(ctx) {
     this.ctx = ctx;
@@ -664,6 +866,11 @@ var PluginApp = class {
       this.emit();
       return;
     }
+    if (this.current && this.current.key !== JSON.stringify([owner.connectionId, owner.profile, storedId])) {
+      this.current = null;
+      this.status = "Loading this chat’s commits…";
+      this.emit();
+    }
     try {
       const routes = await host.profileRoutes();
       if (token !== this.generation || this.disposed) return;
@@ -700,15 +907,32 @@ var PluginApp = class {
   }
   openSide() {
     if (this.current) this.ctx.storage.set(`opened:${this.current.key}`, true);
+    if (this.sideClose && host.revealPane) {
+      host.revealPane(`plugin-workspace:${ID}:side`);
+      return;
+    }
     this.sideClose = host.openWorkspace(`${ID}:side`, {
       title: "Session commits",
       minWidth: "24rem",
       dock: { pane: "workspace", pos: "right" },
-      render: () => /* @__PURE__ */ jsx2(Side, { app: this }),
+      render: () => /* @__PURE__ */ jsx3(Side, { app: this }),
       onClose: () => {
         this.sideClose = null;
       }
     });
+  }
+  openReview(ctrl, commitId, resume = false) {
+    const owner = host.state.focusedSessionOwner?.get();
+    const storedId = host.state.focusedStoredSessionId?.get() || host.state.focusedSessionId?.get();
+    if (ctrl !== this.current || !owner || ctrl.key !== JSON.stringify([owner.connectionId, owner.profile, storedId])) return;
+    if (commitId && !ctrl.state.snapshot?.commits.some((c) => c.id === commitId)) return;
+    const target = resume ? ctrl.resumeTarget : null;
+    if (commitId || target) void ctrl.navigate(commitId || target.commitId, target?.parent);
+    this.ctx.storage.set(`opened:${ctrl.key}`, true);
+    if (this.expanded === ctrl && this.expandedClose) {
+      if (host.revealPane) host.revealPane(`plugin-workspace:${ID}:expanded`);
+      else this.expand(ctrl);
+    } else this.openSide();
   }
   expand(ctrl) {
     this.sideClose?.();
@@ -717,7 +941,7 @@ var PluginApp = class {
     this.expandedClose = host.openWorkspace(`${ID}:expanded`, {
       title: "Commit review",
       minWidth: "30rem",
-      render: () => /* @__PURE__ */ jsx2(ReviewPane, { ctrl, expanded: true, expand: () => {
+      render: () => /* @__PURE__ */ jsx3(ReviewPane, { ctrl, expanded: true, expand: () => {
       } }),
       onClose: () => {
         this.expanded = null;
@@ -733,11 +957,25 @@ var PluginApp = class {
   start() {
     if (typeof host.openWorkspace !== "function" || typeof host.profileRoutes !== "function" || typeof host.requestProfile !== "function" || typeof host.paneVisibility !== "function" || !host.state.focusedSessionOwner || typeof this.ctx.registerSettingsPage !== "function") {
       this.status = "Update Hermes to 0.23.1 with the Desktop workspace and session-owner APIs.";
-      this.ctx.register({ id: "unavailable", area: STATUSBAR_AREAS.right, render: () => /* @__PURE__ */ jsx2("span", { title: this.status, children: "Commit review unavailable" }) });
+      this.ctx.register({ id: "unavailable", area: STATUSBAR_AREAS.right, render: () => /* @__PURE__ */ jsx3("span", { title: this.status, children: "Commit review unavailable" }) });
       return;
     }
-    this.ctx.register({ id: "commits", area: STATUSBAR_AREAS.right, render: () => /* @__PURE__ */ jsx2(Badge, { app: this }) });
-    this.ctx.registerSettingsPage({ id: "review", title: "Chat Git Hash Differ", render: () => /* @__PURE__ */ jsx2(SettingsPage, { app: this }) });
+    this.ctx.register({ id: "commits", area: STATUSBAR_AREAS.right, render: () => /* @__PURE__ */ jsx3(Badge, { app: this }) });
+    if (COMPOSER_AREAS?.underside) this.ctx.register({ id: "commit-chips", area: COMPOSER_AREAS.underside, render: () => /* @__PURE__ */ jsx3(Composer, { app: this }) });
+    if (PALETTE_AREA) this.ctx.register({ id: "review-session-commits", area: PALETTE_AREA, data: {
+      id: `${ID}:review-session-commits`,
+      label: "Review session commits",
+      keywords: ["git", "hash", "diff", "resume"],
+      detail: () => `${this.current?.state.snapshot?.commits.length || 0} commits in the focused chat`,
+      run: () => {
+        const ctrl = this.current;
+        this.ctx.setTimeout(() => {
+          if (ctrl) this.openReview(ctrl, void 0, true);
+          else if (!this.current) this.openSide();
+        }, 0);
+      }
+    } });
+    this.ctx.registerSettingsPage({ id: "review", title: "Chat Git Hash Differ", render: () => /* @__PURE__ */ jsx3(SettingsPage, { app: this }) });
     for (const key of ["focusedSessionId", "focusedStoredSessionId", "focusedSessionOwner", "connectionId", "gateway"]) {
       if (host.state[key]) this.ctx.onDispose(host.state[key].subscribe(() => {
         void this.focus();
@@ -774,34 +1012,46 @@ var PluginApp = class {
 function Badge({ app }) {
   useSyncExternalStore2(app.subscribe, app.getSnapshot);
   const state = app.current?.state;
-  return /* @__PURE__ */ jsxs2("span", { className: "hgd", children: [
-    /* @__PURE__ */ jsx2(Styles, {}),
-    /* @__PURE__ */ jsxs2(Button2, { variant: "ghost", size: "xs", style: { fontSize: 11, lineHeight: "16px" }, title: state?.error || "Review commits mentioned in this chat", onClick: () => app.openSide(), children: [
+  return /* @__PURE__ */ jsxs3("span", { className: "hgd", children: [
+    /* @__PURE__ */ jsx3(Styles, {}),
+    /* @__PURE__ */ jsxs3(Button3, { variant: "ghost", size: "xs", style: { fontSize: 11, lineHeight: "16px" }, title: state?.error || "Review commits mentioned in this chat", onClick: () => app.current ? app.openReview(app.current) : app.openSide(), children: [
       "Commits · ",
       state?.snapshot?.commits.length || 0,
       state?.snapshot?.scanning ? " …" : state?.error ? " !" : ""
     ] })
   ] });
 }
+function Composer({ app }) {
+  useSyncExternalStore2(app.subscribe, app.getSnapshot);
+  const ctrl = app.current;
+  return ctrl?.showChips && ctrl.state.snapshot?.commits.length ? /* @__PURE__ */ jsx3(
+    CommitStrip,
+    {
+      ctrl,
+      open: (commitId, resume) => app.openReview(ctrl, commitId, resume)
+    },
+    ctrl.key
+  ) : null;
+}
 function Side({ app }) {
   useSyncExternalStore2(app.subscribe, app.getSnapshot);
-  return app.current ? /* @__PURE__ */ jsx2(ReviewPane, { ctrl: app.current, expand: () => app.expand(app.current) }, app.current.key) : /* @__PURE__ */ jsxs2("div", { className: "hgd hgd-empty", children: [
-    /* @__PURE__ */ jsx2(Styles, {}),
+  return app.current ? /* @__PURE__ */ jsx3(ReviewPane, { ctrl: app.current, expand: () => app.expand(app.current) }, app.current.key) : /* @__PURE__ */ jsxs3("div", { className: "hgd hgd-empty", children: [
+    /* @__PURE__ */ jsx3(Styles, {}),
     app.status,
-    /* @__PURE__ */ jsx2("p", { children: /* @__PURE__ */ jsx2(Button2, { onClick: () => void app.focus(), children: "Retry" }) })
+    /* @__PURE__ */ jsx3("p", { children: /* @__PURE__ */ jsx3(Button3, { onClick: () => void app.focus(), children: "Retry" }) })
   ] });
 }
 function SettingsPage({ app }) {
   useSyncExternalStore2(app.subscribe, app.getSnapshot);
-  return app.current ? /* @__PURE__ */ jsx2(Settings, { ctrl: app.current }) : /* @__PURE__ */ jsxs2("div", { className: "hgd hgd-empty", children: [
-    /* @__PURE__ */ jsx2(Styles, {}),
+  return app.current ? /* @__PURE__ */ jsx3(Settings, { ctrl: app.current }) : /* @__PURE__ */ jsxs3("div", { className: "hgd hgd-empty", children: [
+    /* @__PURE__ */ jsx3(Styles, {}),
     "Open a chat to configure its profile’s commit review settings."
   ] });
 }
 var plugin_default = {
   id: ID,
   name: "Chat Git Hash Differ",
-  version: "0.1.0",
+  version: "0.2.0",
   defaultEnabled: false,
   register(ctx) {
     new PluginApp(ctx).start();

@@ -80,4 +80,20 @@
 .hgd-dialog { width:100%; max-width:460px; padding:20px; border:1px solid var(--hgd-line); border-radius:10px; background:var(--ui-bg-base,Canvas); box-shadow:0 12px 40px #0004; }
 .hgd-dialog h3 { margin:0 0 10px; }
 .hgd-dialog .hgd-actions { justify-content:flex-end; margin-top:12px; }
+.hgd-commit-strip { display:flex; align-items:center; gap:6px; width:100%; min-width:0; padding:1px 0; }
+.hgd .hgd-chip { display:inline-flex; align-items:center; gap:5px; height:27px; min-height:27px; padding:3px 8px; border:1px solid var(--hgd-line); border-radius:14px; background:var(--composer-fill,var(--ui-bg-base,Canvas)); color:var(--hgd-muted); white-space:nowrap; font-size:11px; font-weight:400; flex-shrink:0; }
+.hgd .hgd-chip:hover { background:var(--chrome-action-hover,color-mix(in srgb,var(--hgd-accent) 12%,transparent)); color:var(--ui-text-primary,inherit); }
+.hgd .hgd-hash-chip { flex-shrink:1; min-width:0; max-width:162px; }
+.hgd-chip code { font:11px ui-monospace,monospace; }
+.hgd-chip-subject { overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.hgd-new { font-size:10px; color:var(--hgd-accent); }
+.hgd .hgd-resume { margin-left:auto; }
+.hgd-commit-picker { width:min(420px,calc(100vw - 24px)); max-height:var(--radix-popover-content-available-height,480px); display:flex; flex-direction:column; gap:8px; padding:12px; overflow:hidden; }
+.hgd-picker-heading { display:flex; justify-content:space-between; gap:8px; }
+.hgd-picker-chat { margin:0; font-size:11px; color:var(--hgd-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.hgd-picker-results { display:flex; flex-direction:column; height:280px; min-height:70px; overflow:hidden; }
+.hgd-picker-result { width:100%; height:100%; border:0; border-radius:5px; padding:6px 8px; background:transparent; text-align:left; color:inherit; }
+.hgd-picker-result:hover { background:color-mix(in srgb,var(--hgd-accent) 9%,transparent); }
+.hgd-picker-result strong,.hgd-picker-result small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.hgd-picker-result small,.hgd-picker-result .hgd-row { color:var(--hgd-muted); font-size:11px; }
 @media(max-width:750px) { .hgd-expanded .hgd-review-body { flex-direction:column; } .hgd-expanded .hgd-file-section { width:auto; height:210px; } .hgd-expanded .hgd-file-section.hgd-collapsed { width:auto; height:33px; } }

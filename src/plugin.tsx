@@ -1,7 +1,8 @@
 import React, { useSyncExternalStore } from 'react';
-import { host, Button, STATUSBAR_AREAS, type PluginContext } from '@hermes/plugin-sdk';
+import { host, Button, STATUSBAR_AREAS, COMPOSER_AREAS, PALETTE_AREA, type PluginContext } from '@hermes/plugin-sdk';
 import { ID, ReviewController, errorMessage, routeKey, shouldAutoOpen } from './controller';
 import { ReviewPane, Settings, Styles } from './review';
+import { CommitStrip } from './composer';
 import type { Route, RPC } from './types';
 
 export class PluginApp {
@@ -44,6 +45,10 @@ export class PluginApp {
       this.status = storedId ? 'Waiting for the chat’s gateway and profile…' : 'Open a chat to discover its commits.';
       this.emit(); return;
     }
+    // Hide the old chat immediately, before asynchronous route lookup completes.
+    if (this.current && this.current.key !== JSON.stringify([owner.connectionId, owner.profile, storedId])) {
+      this.current = null; this.status = 'Loading this chat’s commits…'; this.emit();
+    }
     try {
       const routes = await host.profileRoutes();
       if (token !== this.generation || this.disposed) return;
@@ -74,9 +79,24 @@ export class PluginApp {
 
   openSide() {
     if (this.current) this.ctx.storage.set(`opened:${this.current.key}`, true);
+    if (this.sideClose && host.revealPane) { host.revealPane(`plugin-workspace:${ID}:side`); return; }
     // openWorkspace panes close independently, so closing never disables the detector plugin.
     this.sideClose = host.openWorkspace(`${ID}:side`, { title: 'Session commits', minWidth: '24rem',
       dock: { pane: 'workspace', pos: 'right' }, render: () => <Side app={this}/>, onClose: () => { this.sideClose = null; } });
+  }
+  openReview(ctrl: ReviewController, commitId?: string, resume = false) {
+    const owner = host.state.focusedSessionOwner?.get();
+    const storedId = host.state.focusedStoredSessionId?.get() || host.state.focusedSessionId?.get();
+    // A picker may have been open during a navigation. Never act on its stale chat.
+    if (ctrl !== this.current || !owner || ctrl.key !== JSON.stringify([owner.connectionId, owner.profile, storedId])) return;
+    if (commitId && !ctrl.state.snapshot?.commits.some(c => c.id === commitId)) return;
+    const target = resume ? ctrl.resumeTarget : null;
+    if (commitId || target) void ctrl.navigate(commitId || target!.commitId, target?.parent);
+    this.ctx.storage.set(`opened:${ctrl.key}`, true);
+    if (this.expanded === ctrl && this.expandedClose) {
+      if (host.revealPane) host.revealPane(`plugin-workspace:${ID}:expanded`);
+      else this.expand(ctrl);
+    } else this.openSide();
   }
   expand(ctrl: ReviewController) {
     this.sideClose?.();
@@ -98,6 +118,16 @@ export class PluginApp {
       return;
     }
     this.ctx.register({ id: 'commits', area: STATUSBAR_AREAS.right, render: () => <Badge app={this}/> });
+    if (COMPOSER_AREAS?.underside) this.ctx.register({ id: 'commit-chips', area: COMPOSER_AREAS.underside, render: () => <Composer app={this}/> });
+    if (PALETTE_AREA) this.ctx.register({ id: 'review-session-commits', area: PALETTE_AREA, data: {
+      id: `${ID}:review-session-commits`, label: 'Review session commits', keywords: ['git', 'hash', 'diff', 'resume'],
+      detail: () => `${this.current?.state.snapshot?.commits.length || 0} commits in the focused chat`,
+      run: () => {
+        const ctrl = this.current;
+        // Let the native palette release its focus trap before fronting a workspace.
+        this.ctx.setTimeout(() => { if (ctrl) this.openReview(ctrl, undefined, true); else if (!this.current) this.openSide(); }, 0);
+      },
+    } });
     this.ctx.registerSettingsPage({ id: 'review', title: 'Chat Git Hash Differ', render: () => <SettingsPage app={this}/> });
     for (const key of ['focusedSessionId', 'focusedStoredSessionId', 'focusedSessionOwner', 'connectionId', 'gateway']) {
       if (host.state[key]) this.ctx.onDispose(host.state[key].subscribe(() => { void this.focus(); }));
@@ -124,9 +154,17 @@ export class PluginApp {
 function Badge({ app }: { app: PluginApp }) {
   useSyncExternalStore(app.subscribe, app.getSnapshot);
   const state = app.current?.state;
-  return <span className="hgd"><Styles/><Button variant="ghost" size="xs" style={{ fontSize: 11, lineHeight: '16px' }} title={state?.error || 'Review commits mentioned in this chat'} onClick={() => app.openSide()}>
+  return <span className="hgd"><Styles/><Button variant="ghost" size="xs" style={{ fontSize: 11, lineHeight: '16px' }} title={state?.error || 'Review commits mentioned in this chat'} onClick={() => app.current ? app.openReview(app.current) : app.openSide()}>
     Commits · {state?.snapshot?.commits.length || 0}{state?.snapshot?.scanning ? ' …' : state?.error ? ' !' : ''}
   </Button></span>;
+}
+function Composer({ app }: { app: PluginApp }) {
+  useSyncExternalStore(app.subscribe, app.getSnapshot);
+  const ctrl = app.current;
+  // Render slots are global in SDK 0.23.1. Explicitly follow the focused chat,
+  // using the same owner/profile fence as the persistent status-bar control.
+  return ctrl?.showChips && ctrl.state.snapshot?.commits.length ? <CommitStrip key={ctrl.key} ctrl={ctrl}
+    open={(commitId, resume) => app.openReview(ctrl, commitId, resume)}/> : null;
 }
 function Side({ app }: { app: PluginApp }) {
   useSyncExternalStore(app.subscribe, app.getSnapshot);
@@ -137,5 +175,5 @@ function SettingsPage({ app }: { app: PluginApp }) {
   return app.current ? <Settings ctrl={app.current}/> : <div className="hgd hgd-empty"><Styles/>Open a chat to configure its profile’s commit review settings.</div>;
 }
 
-export default { id: ID, name: 'Chat Git Hash Differ', version: '0.1.0', defaultEnabled: false,
+export default { id: ID, name: 'Chat Git Hash Differ', version: '0.2.0', defaultEnabled: false,
   register(ctx: PluginContext) { new PluginApp(ctx).start(); } };

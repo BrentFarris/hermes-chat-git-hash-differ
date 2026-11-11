@@ -1,5 +1,5 @@
 name: hermes-chat-git-hash-differ
-version: 0.1.0
+version: 0.2.0
 description: Discover commits in chats and review their file changes in Hermes Desktop and Webapp.
 author: Brent Farris
 license: MIT

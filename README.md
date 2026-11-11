@@ -1,24 +1,29 @@
 # Hermes Chat Git Hash Differ
 
-Version **0.1.0** · MIT · Hermes **0.23.1+**
+Version **0.2.0** · MIT · Hermes **0.23.1+**
 
 Find commits mentioned in a Hermes chat and review **commit → file → diff** beside the conversation, or in an expanded workspace tab. Works in Hermes Desktop and Webapp with repositories on the chat's backend host.
 
 ## Review
 
 - **Commits · N** stays in the status bar. The first validated commit automatically opens the resizable **Session commits** pane once per chat and client. Closing it keeps detection running.
+- **Commit chips beneath the composer** keep the focused chat’s commits within reach. Up to three recent hashes show their subjects, with a ✓ for completed reviews. Narrow composers move more chips into **+N**. Click a chip to open that commit directly, including after closing review or disabling automatic opening. Hover for its full hash, subject, repository, and progress.
+- **+N** opens a searchable picker for all commits. Search by hash, subject, or repository; use Down/Up to navigate, Enter to select, and Escape to dismiss. Later discoveries get a quiet **New** label until opened; they never change the active review. The first completed backfill establishes the baseline.
+- **Resume review** restores the last commit, comparison parent, file, context and scroll position on this client, including after a reload. **Review session commits** in the Hermes command palette provides another way back. A matching expanded review tab is brought forward; a different chat’s expanded tab stays bound to that chat.
 - Search commits by subject, hash, or repository. Newest first appearance comes first; repeated short/full mentions increase the count without moving or duplicating a commit.
 - Select a commit to see its directory-grouped file list. Search filenames, filter unreviewed files, and mark files **Reviewed** explicitly. Reading a diff never marks it reviewed.
 - Use the searchable commit picker and previous/next buttons without returning to the overview. Selected files and scroll positions are remembered per commit and parent on that client.
-- **Expand** closes the side pane and opens one reusable **Commit review** workspace tab. It stays attached to its original chat when you switch chats. Close that tab and use **Commits · N** to return to the side pane.
+- **Expand** closes the side pane and opens one reusable **Commit review** workspace tab. It stays attached to its original chat when you switch chats. Close that tab and use a chip, **Resume review**, or **Commits · N** to return to the side pane.
 - Compact panes use unified diffs; expanded tabs offer unified and side-by-side layouts. Side-by-side needs at least 900 px of diff width. **More context** increases surrounding lines up to 1,000.
 - Ordinary commits compare with their parent; root commits compare with the empty tree. Merge commits start at the first parent and offer a parent selector. Review progress is separate for each parent.
 
 **Automatically open the commit panel** defaults to on, under the plugin's settings page (also available from the pane's **Settings** button). This preference belongs to the backend profile. Opening/dismissal and navigation belong to the individual client. Later discoveries never replace your selected commit or reopen a dismissed pane.
 
+**Show commit chips below the composer** also defaults to on and is saved on this client. Disabling it leaves the status-bar control, command-palette entry, and detection active. The strip hides when no valid commits are indexed. Hermes 0.23.1 composer render slots have no per-composer session context: the strip follows the **focused chat**, including in split layouts, and identifies that chat in its accessible label and picker. It uses the public `composer.underside` slot; the plugin does not alter Hermes, rewrite transcript text, or access the chat DOM.
+
 ## Requirements
 
-- Hermes 0.23.1 or later exposing `plugin-rpc-v1`, session owner/profile routing, settings pages, and workspace panes. Both halves of the plugin must be enabled.
+- Hermes 0.23.1 or later exposing `plugin-rpc-v1`, session owner/profile routing, settings pages, and workspace panes. Chips additionally use `COMPOSER_AREAS.underside` and the native popover controls; the palette entry uses `PALETTE_AREA`. Both halves of the plugin must be enabled.
 - Git installed on the **backend** host and available on its PATH; Python is supplied by Hermes. No additional Python packages, model tools, credentials, or hosted Git API are used.
 - Read access to the chat's stored history and host repositories, plus write access to that profile's plugin-data directory.
 - Node 20.19+ (tested with Node 24) and npm are needed only to develop/rebuild the frontend. The package already contains `desktop/plugin.js`. React and `@hermes/plugin-sdk` are supplied by Hermes and remain external.
